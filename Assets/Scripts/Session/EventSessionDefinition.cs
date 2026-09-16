@@ -50,14 +50,22 @@ namespace VRSurgery.Session
         public float PointsPerSecondRemaining => pointsPerSecondRemaining;
         public string EducationalFact => educationalFact;
 
-        /// <summary>Builds a definition in memory. Used by the scene builder and by tests.</summary>
+        /// <summary>
+        /// Builds a definition in memory. Used by the scene builder and by tests.
+        ///
+        /// <paramref name="fact"/> defaults to null rather than to the field's text so a caller
+        /// that says nothing keeps whatever the field already holds. Each scene passes its own:
+        /// the fact is about the procedure being performed, and a transplant explained with a
+        /// sentence about controlling haemorrhage is worse than no sentence at all.
+        /// </summary>
         public static EventSessionDefinition Create(
             float round = 90f,
             float briefingTimeout = 45f,
             float resultHold = 5f,
             float scoreboardHold = 8f,
             bool startOnGrab = true,
-            float pointsPerSecond = 100f)
+            float pointsPerSecond = 100f,
+            string fact = null)
         {
             EventSessionDefinition definition = CreateInstance<EventSessionDefinition>();
             definition.name = "EventSession";
@@ -67,6 +75,12 @@ namespace VRSurgery.Session
             definition.scoreboardHoldSeconds = scoreboardHold;
             definition.startOnFirstToolGrab = startOnGrab;
             definition.pointsPerSecondRemaining = pointsPerSecond;
+
+            if (!string.IsNullOrWhiteSpace(fact))
+            {
+                definition.educationalFact = fact;
+            }
+
             return definition;
         }
     }

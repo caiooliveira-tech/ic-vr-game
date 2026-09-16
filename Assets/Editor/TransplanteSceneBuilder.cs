@@ -37,6 +37,14 @@ namespace VRSurgery.EditorTools
         private const float TableTopY = 0.95f;
 
         /// <summary>
+        /// The room monitor, in metres. Sized to be read from the far side of the patient — about
+        /// 1.2m from the surgeon's eye — not to fill the view.
+        /// </summary>
+        private const float MonitorWidth = 0.56f;
+
+        private const float MonitorHeight = 0.34f;
+
+        /// <summary>
         /// Level the scene is built for. The bypass sites and the round length both follow from
         /// it, so switching this and rebuilding is the whole change — there is no second place
         /// holding a duration that has to be kept in step.
@@ -84,6 +92,7 @@ namespace VRSurgery.EditorTools
             if (area != null) { Object.DestroyImmediate(area); }
 
             RenameRig();
+            WireHands();
 
             GameObject table = BuildTable();
             GameObject patient = BuildPatient(out Bounds bodyBounds);
@@ -98,9 +107,11 @@ namespace VRSurgery.EditorTools
             VesselAnastomosis[] vessels = BuildVessels(systems, thorax);
             BypassPlan plan = BypassPlan.For(_difficulty);
             List<BypassSite> bypass = BuildBypassSites(systems, thorax, plan);
-            WireProcedure(systems, sternum, heart, donor, vessels, bypass, plan);
+            GameObject monitor = BuildMonitor(thorax);
+            WireProcedure(systems, sternum, heart, donor, vessels, bypass, plan, monitor);
             PlaceAnchor(thorax);
             EnsureMainCamera();
+            ApplyStaticAndShadowFlags();
 
             ReportFit(ribcage, heart);
 
@@ -140,10 +151,20 @@ namespace VRSurgery.EditorTools
             GameObject skin = Instantiate(BodyGlb, root.transform);
             skin.name = "Body_Skin";
             ConvertGltfMaterials(skin);
+            ApplyOpenThorax(skin);
 
-            // A quarter turn about X lays the standing figure down with the head toward +Z and
-            // the chest facing up.
-            root.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+            // Lays the standing figure down with the head toward +Z and the chest facing up.
+            //
+            // A plain quarter turn about X is what was here, and it produced a patient face down
+            // on the table — an operation performed on someone's back. The body model's front is
+            // its local +Z (measured, not assumed: at ankle height the toes reach 17.3mm further
+            // along +Z than the heels do along -Z, and at hip height the buttocks reach 17.3mm
+            // along -Z against the belly's 11.7mm). Euler(90,0,0) sends that +Z to world -Y,
+            // which is straight down.
+            //
+            // This is the same rotation the ribcage already uses when its spine comes out on the
+            // far side: head to +Z, front to +Y.
+            root.transform.rotation = Quaternion.Euler(-90f, 180f, 0f);
 
             bodyBounds = WorldBounds(skin);
             float drop = TableTopY - bodyBounds.min.y;
@@ -155,6 +176,88 @@ namespace VRSurgery.EditorTools
                       $"{bodyBounds.size.y * 100f:F1} x {bodyBounds.size.z * 100f:F1} cm, " +
                       $"costas em Y={bodyBounds.min.y:F3}, cabeça em Z={bodyBounds.max.z:F2}");
             return root;
+        }
+
+        /// <summary>
+        /// Swaps the closed chest for the parted one, and puts tissue under the opening.
+        ///
+        /// Both meshes come from ThoraxOpening, which derives them from this same body — so the
+        /// cut skin sits in exactly the local space the closed one did and the swap needs no
+        /// repositioning of the heart, the vessel cuffs or the bypass sites. That is the whole
+        /// reason for generating them from the patient instead of importing an open thorax:
+        /// an imported one would bring its own proportions and origin, and everything placed
+        /// against the body's bounds would have to be re-derived.
+        ///
+        /// Silently skipped when the assets are absent, so the scene still builds on a clean
+        /// checkout where nobody has run the generator yet. The chest is closed then, which is
+        /// the state the project was in before any of this.
+        /// </summary>
+        /// <summary>
+        /// Desligado. A abertura gerada ainda não passou por verificação visual.
+        ///
+        /// O que existe em Generated/ abre uma janela no tórax e mostra tecido por baixo, mas as
+        /// duas últimas correções — subdivisão da borda e normais das paredes — nunca foram vistas
+        /// renderizadas, porque a ponte com o Editor caiu antes. O estado que EU VI tinha a borda
+        /// serrilhada em estrela e lascas saindo da parede.
+        ///
+        /// Um paciente com a pele intacta é pior conteúdo e melhor projeto do que um paciente
+        /// quebrado. Ligar de volta é trocar este false por true, reconstruir a cena e OLHAR.
+        /// </summary>
+        private const bool UseOpenThorax = false;
+
+        private static void ApplyOpenThorax(GameObject skin)
+        {
+            if (!UseOpenThorax)
+            {
+                return;
+            }
+
+            Mesh parted = AssetDatabase.LoadAssetAtPath<Mesh>(
+                "Assets/Models/Patient/Generated/PATIENT_BodySkin_Aberto.asset");
+
+            if (parted == null)
+            {
+                Debug.LogWarning("[Transplante] tórax aberto não encontrado — a pele fica fechada. " +
+                                 "Rodar 'VRSurgery/Tórax — gerar abertura' primeiro.");
+                return;
+            }
+
+            MeshFilter filter = skin.GetComponentInChildren<MeshFilter>();
+            if (filter == null)
+            {
+                Debug.LogError("[Transplante] a pele não tem MeshFilter; abertura não aplicada.");
+                return;
+            }
+
+            filter.sharedMesh = parted;
+
+            Mesh cavityMesh = AssetDatabase.LoadAssetAtPath<Mesh>(
+                "Assets/Models/Patient/Generated/PATIENT_Cavidade.asset");
+
+            if (cavityMesh == null)
+            {
+                Debug.LogWarning("[Transplante] pele aberta sem cavidade — a incisão fica vazada.");
+                return;
+            }
+
+            // Parented to whatever holds the skin's own mesh, carrying the same local transform,
+            // because the cavity's vertices are in that mesh's space and nothing else.
+            GameObject cavity = new GameObject("Cavidade", typeof(MeshFilter), typeof(MeshRenderer));
+            cavity.transform.SetParent(filter.transform.parent, false);
+            cavity.transform.localPosition = filter.transform.localPosition;
+            cavity.transform.localRotation = filter.transform.localRotation;
+            cavity.transform.localScale = filter.transform.localScale;
+
+            cavity.GetComponent<MeshFilter>().sharedMesh = cavityMesh;
+
+            MeshRenderer renderer = cavity.GetComponent<MeshRenderer>();
+            // Subcutaneous rather than muscle red: what shows immediately under a skin incision is
+            // fat and fascia, and a bright red would read as the heart before the chest is open.
+            renderer.sharedMaterial = MakeMaterial(new Color(0.52f, 0.29f, 0.26f), 0f, 0.18f);
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            Debug.Log($"[Transplante] tórax aberto aplicado: pele com {parted.triangles.Length / 3} " +
+                      $"triângulos, cavidade com {cavityMesh.triangles.Length / 3}");
         }
 
         /// <summary>
@@ -508,6 +611,64 @@ namespace VRSurgery.EditorTools
             renderer.receiveShadows = false;
         }
 
+        /// <summary>
+        /// The target on the chest, so the visitor can see where the sternotomy goes.
+        ///
+        /// Without it the first instruction of the operation — open the chest — pointed at nothing:
+        /// the site was an invisible transform and the only way to find it was to sweep a hand
+        /// across the patient until something happened. The five anastomoses already had cuffs for
+        /// exactly this reason; the sternum was the one working site with no mark on it.
+        ///
+        /// Same ring the vessels use, at the gesture's own radius, so what is drawn is the
+        /// tolerance the code actually checks rather than a decoration near it.
+        ///
+        /// It sits on the skin rather than on the bone. The site itself is the middle of the
+        /// sternum, 5.7cm under the surface, and a marker left there is inside the patient where
+        /// nobody can see it. The height is sampled from the skin mesh directly above the site
+        /// instead of typed, so re-exporting the body moves the mark with the chest.
+        /// </summary>
+        private static void BuildSternalMarker(Transform site, float radius)
+        {
+            GameObject skin = GameObject.Find("Body_Skin");
+            float surfaceY = site.position.y;
+
+            if (skin != null)
+            {
+                MeshFilter filter = skin.GetComponentInChildren<MeshFilter>();
+                if (filter != null && filter.sharedMesh != null)
+                {
+                    float highest = float.NegativeInfinity;
+                    foreach (Vector3 raw in filter.sharedMesh.vertices)
+                    {
+                        Vector3 world = filter.transform.TransformPoint(raw);
+                        if (Mathf.Abs(world.x - site.position.x) > 0.03f) { continue; }
+                        if (Mathf.Abs(world.z - site.position.z) > 0.03f) { continue; }
+                        if (world.y > highest) { highest = world.y; }
+                    }
+
+                    if (!float.IsNegativeInfinity(highest)) { surfaceY = highest; }
+                }
+            }
+
+            GameObject mark = new GameObject("SternalMark", typeof(MeshFilter), typeof(MeshRenderer));
+            mark.transform.SetParent(site, true);
+            // A couple of millimetres clear of the skin, or the two surfaces fight for the pixel.
+            mark.transform.position = new Vector3(site.position.x, surfaceY + 0.003f, site.position.z);
+            mark.transform.rotation = Quaternion.identity;
+
+            mark.GetComponent<MeshFilter>().sharedMesh = MakeRing(radius * 0.55f, radius, 28);
+
+            MeshRenderer renderer = mark.GetComponent<MeshRenderer>();
+            // Neither arterial nor venous: this is a guide mark, not a vessel, and it should not
+            // read as one of the five joins the visitor has to sew later.
+            renderer.sharedMaterial = MakeUnlit(new Color(0.95f, 0.78f, 0.35f, 0.55f));
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+
+            Debug.Log($"[Transplante] marca do esterno em Y={mark.transform.position.y:F3} " +
+                      $"(pele em {surfaceY:F3}, sítio do gesto {site.position.y:F3}), raio {radius * 100f:F1}cm");
+        }
+
         /// <summary>A flat annulus on the XZ plane — the open mouth of a vessel, seen end on.</summary>
         private static Mesh MakeRing(float inner, float outer, int segments)
         {
@@ -555,8 +716,184 @@ namespace VRSurgery.EditorTools
             return m;
         }
 
+        /// <summary>
+        /// The monitor the surgeon reads, across the table from where they stand.
+        ///
+        /// On the far side of the patient on purpose: it is the only place in the room a screen
+        /// can sit where looking at it does not mean looking away from the chest. Its position
+        /// comes from the thorax and the stance rather than being typed, so re-exporting the body
+        /// moves the screen with the patient instead of leaving it behind the visitor's head.
+        /// </summary>
+        private static GameObject BuildMonitor(Vector3 thorax)
+        {
+            Vector3 stance = Stance(thorax);
+
+            // Beyond the patient, a little past the far edge of the table, at standing eye height.
+            Vector3 position = new Vector3(thorax.x - 0.78f, 1.45f, thorax.z + 0.10f);
+
+            GameObject monitor = new GameObject("SurgeonMonitor");
+            monitor.transform.position = position;
+
+            // Square on to the surgeon. Yaw only: tilting to chase eye height keystones the text
+            // for no readability gain.
+            Vector3 toSurgeon = new Vector3(stance.x - position.x, 0f, stance.z - position.z);
+            monitor.transform.rotation = toSurgeon.sqrMagnitude > 1e-6f
+                ? Quaternion.LookRotation(toSurgeon.normalized, Vector3.up)
+                : Quaternion.identity;
+
+            GameObject screen = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            screen.name = "Screen";
+            screen.transform.SetParent(monitor.transform, false);
+            screen.transform.localScale = new Vector3(MonitorWidth, MonitorHeight, 1f);
+            // A Unity quad faces -Z, so it is turned to look back along the parent's +Z.
+            screen.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+            Object.DestroyImmediate(screen.GetComponent<Collider>());
+            screen.GetComponent<MeshRenderer>().sharedMaterial =
+                MakeMaterial(new Color(0.06f, 0.08f, 0.11f), 0f, 0.1f);
+
+            // +Z is the surgeon's side of the panel, so the text sits in front of the quad rather
+            // than behind it, or the panel occludes every word.
+            BuildScreenText(monitor.transform, "InstructionText", new Vector3(0f, 0.075f, 0.004f), 0.034f);
+            BuildScreenText(monitor.transform, "ClockText", new Vector3(0f, -0.005f, 0.004f), 0.052f);
+            BuildScreenText(monitor.transform, "ReasonText", new Vector3(0f, -0.105f, 0.004f), 0.022f);
+
+            monitor.AddComponent<TransplantHUD>();
+
+            Debug.Log($"[Transplante] monitor em {position}, virado para o cirurgião em {stance}");
+            return monitor;
+        }
+
+        /// <summary>
+        /// A line of text on the monitor. TextMesh rather than TextMeshPro on purpose: the HUD
+        /// component already takes TextMesh, and a legacy mesh costs the Quest less than a
+        /// world-space canvas for what is a handful of short lines.
+        /// </summary>
+        private static TextMesh BuildScreenText(Transform parent, string name, Vector3 localPosition,
+            float height)
+        {
+            GameObject go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPosition;
+            go.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+
+            TextMesh text = go.AddComponent<TextMesh>();
+            text.anchor = TextAnchor.MiddleCenter;
+            text.alignment = TextAlignment.Center;
+            text.color = new Color(0.82f, 0.88f, 0.95f);
+
+            // A TextMesh with no font renders nothing and logs no error, which is the single
+            // easiest way to ship a monitor that is silently blank.
+            Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            if (font == null)
+            {
+                Debug.LogError("[Transplante] fonte interna ausente; o monitor ficará vazio.");
+            }
+            else
+            {
+                text.font = font;
+                go.GetComponent<MeshRenderer>().sharedMaterial = font.material;
+            }
+
+            // fontSize is the raster resolution and characterSize is the world scale; a glyph ends
+            // up (fontSize * characterSize / 10) units tall. Rastering large and scaling down is
+            // what keeps world-space text from looking chewed at reading distance.
+            text.fontSize = 96;
+            text.characterSize = height * 10f / text.fontSize;
+
+            return text;
+        }
+
+        /// <summary>
+        /// Puts the project's hand adapter on the rig's grab interactors.
+        ///
+        /// Without this the scene had no XRHandInteractor at all, and that one omission broke the
+        /// middle of the operation: the adapter is the only thing that turns XRI's selectEntered /
+        /// selectExited into SurgicalInteractable.OnGrabbed / OnReleased, so IsHeld stayed false
+        /// forever. The native heart is judged on its Released event and therefore could never be
+        /// reported as explanted, and the donor heart — judged on "near the seat AND not held" —
+        /// counted as implanted while still in the visitor's hand.
+        ///
+        /// It goes on the Near-Far Interactor because that is the one that performs grabs. Poke is
+        /// for pressing, Teleport for locomotion this scene does not use, and Gaze is not a hand.
+        /// The adapter requires an XRBaseInteractor on its own GameObject, so it has to live on
+        /// the interactor rather than on the controller root.
+        /// </summary>
+        private static void WireHands()
+        {
+            GameObject rig = GameObject.Find("XR Origin");
+            if (rig == null)
+            {
+                Debug.LogError("[Transplante] sem XR Origin: nada poderá ser agarrado.");
+                return;
+            }
+
+            int wired = 0;
+
+            foreach (string side in new[] { "Left", "Right" })
+            {
+                Transform interactor = rig.transform.Find($"Camera Offset/{side} Controller/Near-Far Interactor");
+                if (interactor == null)
+                {
+                    Debug.LogError($"[Transplante] '{side} Controller' sem Near-Far Interactor; " +
+                                   "essa mão não conseguirá agarrar nada.");
+                    continue;
+                }
+
+                XRHandInteractor hand = interactor.GetComponent<XRHandInteractor>();
+                if (hand == null) { hand = interactor.gameObject.AddComponent<XRHandInteractor>(); }
+
+                SetPrivateField(hand, "isLeftHand", side == "Left");
+                wired++;
+            }
+
+            Debug.Log($"[Transplante] {wired} mão(s) ligadas ao contrato de agarre do projeto");
+        }
+
+        /// <summary>
+        /// The surgeon's two hands, as the rig exposes them.
+        ///
+        /// The poke point is the fingertip the template already positions and draws, so it is what
+        /// the visitor sees themselves touching the patient with. Falling back to the controller
+        /// root keeps the scene buildable against a rig that has been stripped of its poke
+        /// interactors, at the cost of a tip a few centimetres back from the fingertip.
+        /// </summary>
+        private static Transform[] FindHands()
+        {
+            GameObject rig = GameObject.Find("XR Origin");
+            if (rig == null)
+            {
+                Debug.LogWarning("[Transplante] sem XR Origin: nenhum gesto poderá ser executado.");
+                return new Transform[0];
+            }
+
+            List<Transform> hands = new List<Transform>();
+
+            foreach (string side in new[] { "Left", "Right" })
+            {
+                Transform controller = rig.transform.Find($"Camera Offset/{side} Controller");
+                if (controller == null)
+                {
+                    Debug.LogWarning($"[Transplante] rig sem '{side} Controller'.");
+                    continue;
+                }
+
+                Transform poke = controller.Find("Poke Interactor/Poke Point");
+                hands.Add(poke != null ? poke : controller);
+
+                if (poke == null)
+                {
+                    Debug.LogWarning($"[Transplante] '{side} Controller' sem Poke Point; " +
+                                     "usando a raiz do controle como ponta.");
+                }
+            }
+
+            Debug.Log($"[Transplante] {hands.Count} mão(s) encontradas no rig");
+            return hands.ToArray();
+        }
+
         private static void WireProcedure(GameObject systems, GameObject sternum, GameObject heart,
-            GameObject donor, VesselAnastomosis[] vessels, List<BypassSite> bypass, BypassPlan plan)
+            GameObject donor, VesselAnastomosis[] vessels, List<BypassSite> bypass, BypassPlan plan,
+            GameObject monitor)
         {
             SurgeryTelemetry telemetry = systems.GetComponent<SurgeryTelemetry>();
 
@@ -568,7 +905,12 @@ namespace VRSurgery.EditorTools
                 // a third less to do, not because ninety was typed somewhere — so the booth can
                 // run a fast queue or a faithful operation without the two numbers drifting apart.
                 round: plan.RoundSeconds, briefingTimeout: 45f, resultHold: 6f, scoreboardHold: 8f,
-                startOnGrab: true, pointsPerSecond: 100f);
+                // The round starts on the sternotomy, not on a grab: this scene has no instrument
+                // to pick up, so the grab that starts the round in every other scene never happens.
+                startOnGrab: false, pointsPerSecond: 100f,
+                fact: "Entre parar o coração doente e fazer o novo bater, quem mantém o paciente " +
+                      "vivo é a circulação extracorpórea: uma bomba assume o trabalho do coração " +
+                      "e dos pulmões durante toda a troca.");
 
             EventSessionController session = systems.AddComponent<EventSessionController>();
             session.Bind(definition, null, telemetry);
@@ -599,13 +941,130 @@ namespace VRSurgery.EditorTools
             Heartbeat beat = donor.GetComponent<Heartbeat>();
             procedure.Bypass.WeanedOff += () => beat.StartBeating();
 
-            // The cannulae and the clamp are worked with the hand itself rather than a dedicated
-            // instrument, so the worker lives on the systems object and asks for no grab.
+            // Everything in this operation is worked with the hands: there is no instrument to
+            // pick up, so the workers need a tip that tracks the surgeon rather than one attached
+            // to a tool. A single shared tip, following whichever hand is nearest the work, so
+            // either hand can perform any step — and so two workers cannot cancel each other's
+            // progress, which is what a tip per hand would do.
+            List<Transform> work = new List<Transform>();
+            foreach (BypassSite site in bypass) { if (site.Point != null) { work.Add(site.Point); } }
+            foreach (VesselAnastomosis vessel in vessels) { work.Add(vessel.transform); }
+
+            GameObject sternalSite = new GameObject("SternalMidline");
+            sternalSite.transform.SetParent(systems.transform, true);
+            sternalSite.transform.position = WorldBounds(sternum).center;
+            work.Add(sternalSite.transform);
+
+            GameObject tipObject = new GameObject("SurgeonHandTip");
+            tipObject.transform.SetParent(systems.transform, true);
+            SurgeonHandTip tip = tipObject.AddComponent<SurgeonHandTip>();
+            tip.Bind(FindHands(), work.ToArray());
+
             BypassWorker worker = systems.AddComponent<BypassWorker>();
-            worker.Bind(null, bypass, procedure);
+            worker.Bind(tipObject.transform, bypass, procedure);
+            SetPrivateField(worker, "requireHeldInstrument", false);
+
+            // The vessels had no worker at all, so the five joins could never be sewn and the
+            // operation dead-ended at its longest stage.
+            AnastomosisWorker sewing = systems.AddComponent<AnastomosisWorker>();
+            sewing.Bind(tipObject.transform, vessels, procedure);
+            SetPrivateField(sewing, "requireHeldInstrument", false);
+
+            // Half the sternum's length, so the gesture covers the bone the incision runs along
+            // rather than a coin in the middle of it.
+            float sternalReach = Mathf.Max(0.05f, WorldBounds(sternum).size.z * 0.5f);
+
+            BuildSternalMarker(sternalSite.transform, sternalReach);
+
+            SternotomyWorker opening = systems.AddComponent<SternotomyWorker>();
+            opening.Bind(tipObject.transform, sternalSite.transform,
+                sternum.GetComponent<SternotomyController>(), procedure, sternalReach, 3f);
+
+            // The booth loop. Without this the session never left Attract: the clock never
+            // started, the patient was never reset between visitors, and finishing the operation
+            // did not win the round.
+            TransplantRoundBridge bridge = systems.AddComponent<TransplantRoundBridge>();
+            bridge.Bind(session, procedure, sternum.GetComponent<SternotomyController>(), opening,
+                new[] { heart.GetComponent<GrabbableOrgan>(), donor.GetComponent<GrabbableOrgan>() },
+                vessels, beat);
+
+            monitor.GetComponent<TransplantHUD>().Bind(
+                procedure, session, worker, opening,
+                monitor.transform.Find("InstructionText").GetComponent<TextMesh>(),
+                monitor.transform.Find("ClockText").GetComponent<TextMesh>(),
+                monitor.transform.Find("ReasonText").GetComponent<TextMesh>());
 
             Debug.Log($"[Transplante] procedimento ligado: {procedure.VesselCount} vasos, " +
-                      $"rodada {definition.RoundSeconds:F0}s, assento pericárdico em {seat.transform.position}");
+                      $"rodada {definition.RoundSeconds:F0}s, assento pericárdico em {seat.transform.position}, " +
+                      $"esternotomia num raio de {sternalReach * 100f:F1}cm, " +
+                      $"{work.Count} ponto(s) de trabalho para as mãos");
+        }
+
+        /// <summary>
+        /// Marks what never moves as static, and stops what nobody can see from casting shadows.
+        ///
+        /// Measured before this existed: 46 of 53 renderers were dynamic, carrying 292.024 of the
+        /// scene's 296.408 triangles, and 45 renderers were casting shadows from the room's single
+        /// directional light — a second pass over almost the whole scene.
+        ///
+        /// Listed by name rather than inferred. A heuristic like "has no animating component" would
+        /// quietly mark the sternum static the day someone renames SternotomyController, and a
+        /// static object that moves renders in the wrong place with no error.
+        /// </summary>
+        private static void ApplyStaticAndShadowFlags()
+        {
+            // Never moves for the whole session.
+            string[] immovable =
+            {
+                "TableModel", "Body_Skin", "RibcageModel", "StandColumn", "Basin", "Screen",
+            };
+
+            // Deliberately absent: SternumModel (the sternotomy animates it), Heart and DonorHeart
+            // (the visitor carries them), and the monitor's TextMesh lines (their mesh is rebuilt
+            // whenever the text changes, which static batching cannot follow).
+
+            // Inside the patient or flat against a screen. Neither casts a shadow anyone can see,
+            // and both were paying for one every frame.
+            string[] noShadow =
+            {
+                "RibcageModel", "SternumModel", "Screen", "InstructionText", "ClockText", "ReasonText",
+            };
+
+            int marked = 0, unshadowed = 0;
+
+            foreach (Renderer renderer in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None))
+            {
+                if (System.Array.IndexOf(immovable, renderer.gameObject.name) >= 0)
+                {
+                    GameObjectUtility.SetStaticEditorFlags(renderer.gameObject,
+                        StaticEditorFlags.BatchingStatic | StaticEditorFlags.ContributeGI |
+                        StaticEditorFlags.OccluderStatic | StaticEditorFlags.OccludeeStatic);
+                    marked++;
+                }
+
+                if (System.Array.IndexOf(noShadow, renderer.gameObject.name) >= 0 &&
+                    renderer.shadowCastingMode != UnityEngine.Rendering.ShadowCastingMode.Off)
+                {
+                    renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    unshadowed++;
+                }
+            }
+
+            // The room itself came from the template scene and never moves either.
+            GameObject environment = GameObject.Find("Environment");
+            if (environment != null)
+            {
+                foreach (Renderer renderer in environment.GetComponentsInChildren<Renderer>(true))
+                {
+                    GameObjectUtility.SetStaticEditorFlags(renderer.gameObject,
+                        StaticEditorFlags.BatchingStatic | StaticEditorFlags.ContributeGI |
+                        StaticEditorFlags.OccluderStatic | StaticEditorFlags.OccludeeStatic);
+                    marked++;
+                }
+            }
+
+            Debug.Log($"[Transplante] {marked} renderer(s) marcados static, " +
+                      $"{unshadowed} deixaram de lançar sombra");
         }
 
         /// <summary>
@@ -746,10 +1205,17 @@ namespace VRSurgery.EditorTools
             }
         }
 
+        /// <summary>
+        /// Where the surgeon stands: beside the chest, on the patient's left. Derived once and
+        /// shared, because the monitor has to face this spot and a second copy of the number is a
+        /// second chance for the two to drift apart.
+        /// </summary>
+        private static Vector3 Stance(Vector3 thorax) => new Vector3(thorax.x + 0.45f, 0f, thorax.z);
+
         /// <summary>Puts the surgeon beside the chest, on the patient's left, facing the thorax.</summary>
         private static void PlaceAnchor(Vector3 thorax)
         {
-            Vector3 stance = new Vector3(thorax.x + 0.45f, 0f, thorax.z);
+            Vector3 stance = Stance(thorax);
             Vector3 toWork = new Vector3(thorax.x - stance.x, 0f, thorax.z - stance.z);
             Quaternion facing = toWork.sqrMagnitude > 1e-6f
                 ? Quaternion.LookRotation(toWork.normalized, Vector3.up)

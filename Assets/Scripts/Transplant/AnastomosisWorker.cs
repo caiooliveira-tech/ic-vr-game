@@ -13,13 +13,16 @@ namespace VRSurgery.Transplant
     /// same sites later without any of them knowing about each other.
     ///
     /// Only works while the instrument is actually held. An instrument lying on the tray inside a
-    /// site's radius would otherwise sew the vessel by itself.
+    /// site's radius would otherwise sew the vessel by itself. A bare hand is the exception the
+    /// class was always written for: there is nothing to put down, so there is nothing to hold.
     /// </summary>
-    [RequireComponent(typeof(SurgicalInteractable))]
     public class AnastomosisWorker : MonoBehaviour
     {
         [Tooltip("The working end. Defaults to this transform.")]
         [SerializeField] private Transform tip;
+
+        [Tooltip("Require the instrument to be held. Off lets a bare tracked hand drive the sites.")]
+        [SerializeField] private bool requireHeldInstrument = true;
 
         [Tooltip("Sites this instrument can join. Filled by the scene builder.")]
         [SerializeField] private List<VesselAnastomosis> sites = new List<VesselAnastomosis>();
@@ -47,7 +50,7 @@ namespace VRSurgery.Transplant
             ActiveSite = null;
 
             if (deltaTime <= 0f || tip == null) { return; }
-            if (_interactable != null && !_interactable.IsHeld) { return; }
+            if (requireHeldInstrument && _interactable != null && !_interactable.IsHeld) { return; }
             if (procedure != null && procedure.Stage != TransplantStage.ConnectVessels) { return; }
 
             // Nearest unjoined site the tip is inside. Nearest rather than first, because the

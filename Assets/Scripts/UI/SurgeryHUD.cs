@@ -57,7 +57,11 @@ namespace VRSurgery.Surgery
             SurgeryObjectiveSystem.ObjectiveRuntime active = objectiveSystem.ActiveObjective;
             if (active == null)
             {
-                SetText(objectiveSystem.IsSurgeryComplete ? "PROCEDURE COMPLETE" : "STANDBY");
+                // Eram "PROCEDURE COMPLETE" e "STANDBY": as duas únicas frases em inglês que
+                // chegavam ao monitor da sala. O estande é no Brasil e o público é leigo.
+                // "PROCEDIMENTO CONCLUÍDO" repete a linha 47 de propósito — os dois caminhos
+                // dizem a mesma coisa ao jogador e devem ler igual.
+                SetText(objectiveSystem.IsSurgeryComplete ? "PROCEDIMENTO CONCLUÍDO" : "AGUARDANDO");
                 return;
             }
 

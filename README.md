@@ -110,8 +110,12 @@ vinheta cobrindo a visão inteira. Todos esses passaram nos testes.
   -projectPath . -runTests -testPlatform PlayMode -testResults /tmp/res.xml
 ```
 
-**106 testes, 106 passando.** O que eles cobrem e por quê:
+**121 testes, 121 passando.** O que eles cobrem e por quê:
 
+- **A volta do estande**: a rodada começa no primeiro corte, o transplante concluído vence a
+  rodada, e o visitante seguinte recebe tórax fechado e coração doente de volta. Essas regras
+  já existiam todas, e nenhuma estava ligada — a classe de defeito que um teste de cada lado
+  da junção não enxerga
 - **Ordem da CEC** nos três níveis, incluindo cada erro clínico nomeado
 - **Ergonomia**: todo instrumento alcançável pelos dois ombros — canhoto e pessoa de
   braço curto precisam pegar qualquer instrumento com qualquer mão
