@@ -17,7 +17,7 @@ namespace VRSurgery.Cutting
     /// That is the shape of every cut this project needs — skin, pericardium, a vessel wall — and
     /// it keeps the arithmetic in two dimensions, which is what makes it affordable on a Quest.
     /// </summary>
-    public static class MeshIncision
+    public static partial class MeshIncision
     {
         /// <summary>How far apart the two lips are pulled, per unit of cut depth, in metres.</summary>
         public const float DefaultRetraction = 0.004f;

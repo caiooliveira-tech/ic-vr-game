@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using VRSurgery.Cutting;
 using VRSurgery.Surgery;
 using VRSurgery.Tools;
 
@@ -26,6 +27,7 @@ namespace VRSurgery.Tissue
 
         [Header("References")]
         [SerializeField] private IncisionGuide guide;
+        [SerializeField] private CuttableTissue cuttableTissue;
 
         private TissueSurface _tissue;
         private bool _sessionActive;
@@ -68,6 +70,10 @@ namespace VRSurgery.Tissue
         private void Awake()
         {
             _tissue = GetComponent<TissueSurface>();
+            if (cuttableTissue == null)
+            {
+                cuttableTissue = GetComponent<CuttableTissue>();
+            }
             if (guide == null)
             {
                 guide = GetComponentInChildren<IncisionGuide>();
@@ -78,7 +84,25 @@ namespace VRSurgery.Tissue
         /// Feeds one swept blade segment (world space) into the system.
         /// Returns true if this segment produced contact with the tissue.
         /// </summary>
-        public bool ProcessBladeSegment(Vector3 worldPrevious, Vector3 worldCurrent, float deltaTime, SurgicalTool tool)
+        public bool ProcessBladeSegment(Vector3 worldPrevious, Vector3 worldCurrent,
+            float deltaTime, SurgicalTool tool)
+        {
+            return ProcessBladeSegment(worldPrevious, worldCurrent, deltaTime, tool, null);
+        }
+
+        public bool ProcessBladeSegment(Vector3 worldPrevious, Vector3 worldCurrent,
+            float deltaTime, SurgicalTool tool, BladeTip blade)
+        {
+            if (cuttableTissue != null)
+            {
+                return ProcessCurvedBladeSegment(worldPrevious, worldCurrent, deltaTime, tool, blade);
+            }
+
+            return ProcessPlanarBladeSegment(worldPrevious, worldCurrent, deltaTime, tool);
+        }
+
+        private bool ProcessPlanarBladeSegment(Vector3 worldPrevious, Vector3 worldCurrent,
+            float deltaTime, SurgicalTool tool)
         {
             if (_tissue == null)
             {
@@ -136,6 +160,54 @@ namespace VRSurgery.Tissue
             return true;
         }
 
+        private bool ProcessCurvedBladeSegment(Vector3 worldPrevious, Vector3 worldCurrent,
+            float deltaTime, SurgicalTool tool, BladeTip blade)
+        {
+            CuttableTissue.Contact contact = cuttableTissue.SampleContact(
+                worldPrevious, worldCurrent, blade);
+
+            float travelled = Vector3.Distance(worldPrevious, worldCurrent);
+            float speed = deltaTime > 0f ? travelled / deltaTime : 0f;
+            float speedQuality = IncisionGeometry.EvaluateCutSpeed(
+                speed, minimumCutSpeed, maximumCutSpeed);
+
+            if (!contact.InContact || !contact.CanCut || speedQuality <= 0f)
+            {
+                if (_sessionActive) { EndSession(); }
+                return contact.InContact;
+            }
+
+            float effectiveDepth = contact.Depth01 * Mathf.Clamp01(cutSensitivity) * speedQuality;
+            CuttableTissue.Contact effective = new CuttableTissue.Contact(
+                true, true, contact.LocalPoint, contact.LocalNormal, effectiveDepth);
+
+            if (!_sessionActive)
+            {
+                _sessionActive = true;
+                _activeTool = tool;
+                SurgeryEvents.RaiseIncisionStarted(tool);
+            }
+
+            bool pointAdded = cuttableTissue.IsRecording
+                ? cuttableTissue.ContinueCut(effective)
+                : cuttableTissue.BeginCut(effective);
+
+            if (pointAdded)
+            {
+                _tissue.ApplyIncision(contact.LocalPoint, effectiveDepth);
+                RecordDeviation(contact.LocalPoint);
+                SurgeryEvents.RaiseIncisionProgressed(tool, Progress01);
+            }
+
+            if (!_completed && Progress01 >= 1f)
+            {
+                _completed = true;
+                SurgeryEvents.RaiseIncisionCompleted(tool);
+            }
+
+            return true;
+        }
+
         private void RecordDeviation(Vector3 localPoint)
         {
             if (guide == null)
@@ -160,8 +232,18 @@ namespace VRSurgery.Tissue
 
         private void EndSession()
         {
+            if (cuttableTissue != null && cuttableTissue.IsRecording)
+            {
+                cuttableTissue.EndCut();
+            }
             _sessionActive = false;
             _activeTool = null;
+        }
+
+        /// <summary>Called when the interactor is released or leaves this target entirely.</summary>
+        public void EndBladeContact()
+        {
+            if (_sessionActive) { EndSession(); }
         }
 
         public void ResetSession()
@@ -176,6 +258,11 @@ namespace VRSurgery.Tissue
             if (_tissue != null)
             {
                 _tissue.ResetTissue();
+            }
+
+            if (cuttableTissue != null)
+            {
+                cuttableTissue.ResetTissue();
             }
         }
 

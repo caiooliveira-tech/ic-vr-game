@@ -88,6 +88,29 @@ sem frame.
 | `Scripts/Session/` | Cronômetro, placar, estados do estande |
 | `Scripts/Cutting/MeshIncision.cs` | Corte topológico de malha (ver Limitações) |
 
+### Incisão local experimental em pele curva
+
+O primeiro incremento de incisão curva usa uma única cadeia de execução:
+
+`BladeTip → CuttingInteractor → IncisionSystem → CuttableTissue → MeshIncision`
+
+- `MeshIncision.Curved.cs` recebe uma polyline 3D local, divide somente os triângulos
+  interceptados, duplica as duas bordas e preserva UV, normal, tangente e submesh.
+- `CuttableTissue` filtra/espaça a trajetória e só reconstrói a mesh e o `MeshCollider`
+  em `END CUT`, não a cada frame. As faces internas usam um material separado.
+- A orientação exposta por `BladeTip` rejeita contato superficial, movimento fora do fio e
+  a face da lâmina deitada sobre a pele.
+- `CurvedSkinProbe` chama a mesma API do runtime e extrai sua fixture da malha humana
+  `PATIENT_BodySkin.glb`; não usa cubo, cápsula, plano ou o paciente da cena final.
+
+Para tornar um objeto cortável, coloque no mesmo GameObject `MeshFilter`, `MeshRenderer`,
+`MeshCollider`, `TissueSurface`, `IncisionSystem` e `CuttableTissue`. Configure profundidade,
+abertura, espaçamento, resistência e material interno no `CuttableTissue`. No bisturi,
+`BladeTip.localEdgeDirection` deve acompanhar o fio e `localFaceNormal` a face larga da lâmina.
+
+Arquivos deste incremento: `MeshIncision.cs`, `MeshIncision.Curved.cs`, `CuttableTissue.cs`,
+`BladeTip.cs`, `CuttingInteractor.cs`, `IncisionSystem.cs` e `CurvedSkinProbe.cs`.
+
 ## Verificação sem headset
 
 Ferramentas de editor que renderizam o estado da cena para PNG, porque uma classe
@@ -132,13 +155,25 @@ legibilidade dos anéis a 30 cm do olho são estimativas informadas, não mediç
   prática: não dá para derivar geometricamente a boca de cada vaso, então os pontos de
   anastomose são transforms posicionados à mão, com anéis visíveis no lugar do modelo
   de vasos.
-- **`MeshIncision` corta de verdade** — a malha é seccionada, medido por contagem de
-  arestas de borda — mas foi validado num retalho plano tesselado, não na pele do
-  paciente. A borda ainda sai ondulada.
+- **A incisão curva ainda é experimental.** A fixture orgânica aceita duas incisões locais
+  consecutivas e preserva os canais da mesh, mas a captura atual reprovou visualmente: o
+  albedo embutido da pele não apareceu no render batch e há descontinuidades escuras entre
+  trechos das faces internas. Portanto `CurvedSkinTest` ainda não é apresentação final.
+- **Custo ainda não medido no Quest.** Na fixture Editor de 6.608 vértices, duas reconstruções
+  afetaram 219 triângulos e levaram 326,7 ms no total. O collider é recocido somente no fim
+  da trajetória, mas ainda precisa de perfil no hardware alvo.
+- **Contato curvo usa um eixo externo dominante.** Funciona para uma pequena região torácica;
+  superfícies que dobram mais de 90 graus exigirão outra estratégia de projeção.
+- `WoundRenderer` (faixa cosmética) e `IncisableSkin` (troca binária de estado) continuam no
+  legado e não foram removidos neste incremento.
 - **A projeção exige Display 2**, que não existe em Quest standalone.
 - **O gradil costal** é proporcionalmente estreito: 23,8 × 16,0 × 30,0 cm contra
   28 × 20 × 30 reais. Escala uniforme, sem distorção, mas um tórax magro.
 - **Sem entrada de nome** no placar: as corridas entram como "Anônimo".
+
+Próximo passo recomendado para a incisão: ordenar a borda por conectividade topológica (não
+apenas por distância ao longo da trajetória), gerar uma parede interna contínua e corrigir a
+ligação do albedo/normal da pele no URP. Só depois repetir a captura orgânica e perfilar no Quest.
 
 ## Orçamento de Quest
 

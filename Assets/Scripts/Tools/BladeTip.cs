@@ -15,12 +15,20 @@ namespace VRSurgery.Tools
     /// </summary>
     public class BladeTip : MonoBehaviour
     {
+        [Header("Blade frame")]
+        [Tooltip("Local direction of the cutting edge/normal cutting stroke.")]
+        [SerializeField] private Vector3 localEdgeDirection = Vector3.forward;
+        [Tooltip("Local normal of the broad blade face. A face laid flat on skin must not cut.")]
+        [SerializeField] private Vector3 localFaceNormal = Vector3.right;
+
         private Vector3 _previousPosition;
         private bool _hasPreviousPosition;
 
         public Vector3 PreviousPosition => _hasPreviousPosition ? _previousPosition : transform.position;
         public Vector3 CurrentPosition => transform.position;
         public Vector3 MovementDelta => CurrentPosition - PreviousPosition;
+        public Vector3 EdgeDirection => transform.TransformDirection(localEdgeDirection).normalized;
+        public Vector3 FaceNormal => transform.TransformDirection(localFaceNormal).normalized;
 
         private void OnEnable()
         {

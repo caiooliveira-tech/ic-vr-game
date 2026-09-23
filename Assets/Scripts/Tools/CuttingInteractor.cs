@@ -27,6 +27,7 @@ namespace VRSurgery.Tools
         private readonly Collider[] _overlapResults = new Collider[8];
         private TissueSurface _cachedTissue;
         private IncisionSystem _cachedIncisionSystem;
+        private IncisionSystem _activeIncisionSystem;
 
         /// <summary>True on any step where the blade was inside tissue.</summary>
         public bool IsInContact { get; private set; }
@@ -72,12 +73,14 @@ namespace VRSurgery.Tools
 
             if (!_tool.HasCapability(ToolCapability.Cut))
             {
+                EndActiveCut();
                 IsInContact = false;
                 return;
             }
 
             if (requireHeld && !_tool.IsHeld)
             {
+                EndActiveCut();
                 IsInContact = false;
                 return;
             }
@@ -85,11 +88,29 @@ namespace VRSurgery.Tools
             IncisionSystem system = ResolveIncisionSystem(current);
             if (system == null)
             {
+                EndActiveCut();
                 IsInContact = false;
                 return;
             }
 
-            IsInContact = system.ProcessBladeSegment(previous, current, Time.fixedDeltaTime, _tool);
+            if (_activeIncisionSystem != null && _activeIncisionSystem != system)
+            {
+                _activeIncisionSystem.EndBladeContact();
+            }
+            _activeIncisionSystem = system;
+            IsInContact = system.ProcessBladeSegment(
+                previous, current, Time.fixedDeltaTime, _tool, bladeTip);
+        }
+
+        private void OnDisable() => EndActiveCut();
+
+        private void EndActiveCut()
+        {
+            if (_activeIncisionSystem != null)
+            {
+                _activeIncisionSystem.EndBladeContact();
+                _activeIncisionSystem = null;
+            }
         }
 
         private IncisionSystem ResolveIncisionSystem(Vector3 tipPosition)
@@ -138,6 +159,10 @@ namespace VRSurgery.Tools
         /// <summary>Lets tests and the tray-reset flow bind a tissue target without a physics query.</summary>
         public void BindTissue(IncisionSystem system)
         {
+            if (_activeIncisionSystem != null && _activeIncisionSystem != system)
+            {
+                EndActiveCut();
+            }
             _cachedIncisionSystem = system;
             _cachedTissue = system != null ? system.Tissue : null;
         }
