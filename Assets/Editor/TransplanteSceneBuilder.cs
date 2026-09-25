@@ -804,6 +804,89 @@ namespace VRSurgery.EditorTools
         }
 
         /// <summary>
+        /// A small keypad the visitor types their own name on, set within arm's reach of the
+        /// stance and facing it the same way the monitor faces it.
+        ///
+        /// Its position is a first placement, not a measured one — like the anastomosis offsets,
+        /// it has not been checked against a real chest and a real headset, and needs the same
+        /// advisor pass before the stand opens.
+        /// </summary>
+        private static List<NameEntryKey> BuildNameEntryKeyboard(GameObject sternum, GameObject systems)
+        {
+            Vector3 thoraxCenter = WorldBounds(sternum).center;
+            Vector3 stance = Stance(thoraxCenter);
+
+            // Between the stance and the sternum, off to the side of the vessels being sewn
+            // rather than on top of them.
+            Vector3 center = new Vector3(
+                Mathf.Lerp(stance.x, thoraxCenter.x, 0.55f),
+                thoraxCenter.y,
+                thoraxCenter.z + 0.28f);
+
+            GameObject panel = new GameObject("NameEntryKeyboard");
+            panel.transform.SetParent(systems.transform, true);
+            panel.transform.position = center;
+
+            // Same yaw-only, face-the-stance convention as BuildMonitor, so BuildScreenText's
+            // "+Z is the surgeon's side" trick keeps working on this panel too.
+            Vector3 toSurgeon = new Vector3(stance.x - center.x, 0f, stance.z - center.z);
+            panel.transform.rotation = toSurgeon.sqrMagnitude > 1e-6f
+                ? Quaternion.LookRotation(toSurgeon.normalized, Vector3.up)
+                : Quaternion.identity;
+
+            string[] rows = { "ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ" };
+            const float spacing = 0.05f;
+
+            List<NameEntryKey> keys = new List<NameEntryKey>();
+
+            for (int r = 0; r < rows.Length; r++)
+            {
+                string row = rows[r];
+                for (int c = 0; c < row.Length; c++)
+                {
+                    char letter = row[c];
+                    Vector3 local = new Vector3(c * spacing, -r * spacing, 0f);
+                    keys.Add(BuildNameEntryKey(panel.transform, letter.ToString(), local,
+                        NameEntryKey.KeyAction.Character, letter));
+                }
+            }
+
+            // The three special keys share the letters' last row, one column after "YZ".
+            keys.Add(BuildNameEntryKey(panel.transform, "SPC", new Vector3(2 * spacing, -4 * spacing, 0f),
+                NameEntryKey.KeyAction.Character, ' '));
+            keys.Add(BuildNameEntryKey(panel.transform, "DEL", new Vector3(3 * spacing, -4 * spacing, 0f),
+                NameEntryKey.KeyAction.Backspace, '\0'));
+            keys.Add(BuildNameEntryKey(panel.transform, "OK", new Vector3(4 * spacing, -4 * spacing, 0f),
+                NameEntryKey.KeyAction.Confirm, '\0'));
+
+            Debug.Log($"[Transplante] teclado do placar em {center}, {keys.Count} tecla(s)");
+
+            return keys;
+        }
+
+        /// <summary>One keycap: a small block with a printed label, holding the NameEntryKey.</summary>
+        private static NameEntryKey BuildNameEntryKey(Transform parent, string label, Vector3 localPosition,
+            NameEntryKey.KeyAction action, char character)
+        {
+            GameObject cap = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cap.name = $"Key_{label}";
+            cap.transform.SetParent(parent, false);
+            cap.transform.localPosition = localPosition;
+            cap.transform.localRotation = Quaternion.identity;
+            cap.transform.localScale = new Vector3(0.035f, 0.035f, 0.01f);
+            Object.DestroyImmediate(cap.GetComponent<Collider>());
+            cap.GetComponent<MeshRenderer>().sharedMaterial =
+                MakeMaterial(new Color(0.18f, 0.22f, 0.28f), 0f, 0.25f);
+
+            NameEntryKey key = cap.AddComponent<NameEntryKey>();
+            key.Bind(action, character);
+
+            BuildScreenText(cap.transform, "Label", new Vector3(0f, 0f, 0.008f), 0.016f).text = label;
+
+            return key;
+        }
+
+        /// <summary>
         /// Puts the project's hand adapter on the rig's grab interactors.
         ///
         /// Without this the scene had no XRHandInteractor at all, and that one omission broke the
@@ -915,8 +998,13 @@ namespace VRSurgery.EditorTools
             EventSessionController session = systems.AddComponent<EventSessionController>();
             session.Bind(definition, null, telemetry);
 
+            // Not leaderboard.Bind(session): the concept has the visitor typing a name before the
+            // run is filed, so NameEntryController takes over the RoundEnded subscription instead
+            // of the leaderboard filing every win under "Anônimo" by itself.
             Leaderboard leaderboard = systems.AddComponent<Leaderboard>();
-            leaderboard.Bind(session);
+
+            NameEntryController nameEntry = systems.AddComponent<NameEntryController>();
+            nameEntry.Bind(session, leaderboard);
 
             // The seat is where the heart starts: the donor organ has to come back to it, and the
             // native one has to be carried away from it.
@@ -970,6 +1058,13 @@ namespace VRSurgery.EditorTools
             sewing.Bind(tipObject.transform, vessels, procedure);
             SetPrivateField(sewing, "requireHeldInstrument", false);
 
+            // The visitor's own hand types the name too, on a small keypad set within reach of
+            // the stance rather than on the monitor across the table — the monitor sits beyond
+            // the patient on purpose (see BuildMonitor), which puts it out of arm's reach.
+            List<NameEntryKey> nameKeys = BuildNameEntryKeyboard(sternum, systems);
+            NameEntryWorker keyboard = systems.AddComponent<NameEntryWorker>();
+            keyboard.Bind(tipObject.transform, nameKeys, nameEntry);
+
             // Half the sternum's length, so the gesture covers the bone the incision runs along
             // rather than a coin in the middle of it.
             float sternalReach = Mathf.Max(0.05f, WorldBounds(sternum).size.z * 0.5f);
@@ -993,7 +1088,7 @@ namespace VRSurgery.EditorTools
                 monitor.transform.Find("InstructionText").GetComponent<TextMesh>(),
                 monitor.transform.Find("ClockText").GetComponent<TextMesh>(),
                 monitor.transform.Find("ReasonText").GetComponent<TextMesh>(),
-                sewing);
+                sewing, nameEntry);
 
             Debug.Log($"[Transplante] procedimento ligado: {procedure.VesselCount} vasos, " +
                       $"rodada {definition.RoundSeconds:F0}s, assento pericárdico em {seat.transform.position}, " +

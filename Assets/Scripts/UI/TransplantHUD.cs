@@ -31,6 +31,10 @@ namespace VRSurgery.Surgery
         [SerializeField] private SternotomyWorker sternotomyWorker;
         [SerializeField] private AnastomosisWorker anastomosisWorker;
 
+        [Tooltip("Optional. While set and awaiting a name, the monitor prompts for it instead of " +
+                 "just announcing the win.")]
+        [SerializeField] private NameEntryController nameEntry;
+
         [Header("Screen")]
         [SerializeField] private TextMesh instructionText;
         [SerializeField] private TextMesh clockText;
@@ -122,6 +126,13 @@ namespace VRSurgery.Surgery
                             : "Abra o tórax para começar";
 
                     case SessionState.Success:
+                        if (nameEntry != null && nameEntry.IsAwaitingName)
+                        {
+                            string typed = nameEntry.TypedName;
+                            string shown = string.IsNullOrEmpty(typed) ? "_" : typed;
+                            return "CORAÇÃO BATENDO\nDigite seu nome no teclado:\n" + shown;
+                        }
+
                         return "CORAÇÃO BATENDO\nTransplante concluído";
 
                     case SessionState.Failure:
@@ -247,7 +258,8 @@ namespace VRSurgery.Surgery
             TextMesh instruction,
             TextMesh clock,
             TextMesh reason,
-            AnastomosisWorker anastomosis = null)
+            AnastomosisWorker anastomosis = null,
+            NameEntryController nameEntryController = null)
         {
             if (bypassWorker != null)
             {
@@ -260,6 +272,7 @@ namespace VRSurgery.Surgery
             bypassWorker = worker;
             sternotomyWorker = sternotomy;
             anastomosisWorker = anastomosis;
+            nameEntry = nameEntryController;
             instructionText = instruction;
             clockText = clock;
             reasonText = reason;
