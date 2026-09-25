@@ -34,6 +34,16 @@ namespace VRSurgery.Surgery
         /// </summary>
         private Func<float> _bleedIntensity;
 
+        /// <summary>
+        /// The three lines that name what the round is about, not just how it is going. Defaults
+        /// match what this HUD always said, back when it only ever ran on SurgeryMVP; a scene
+        /// with a different first gesture (no scalpel to grab, say) overrides them via BindCopy
+        /// instead of this file growing a second hardcoded truth per scene.
+        /// </summary>
+        [SerializeField] private string attractHeadline = "CONTROLE A HEMORRAGIA";
+        [SerializeField] private string attractFallbackSubline = "Coloque o headset para começar";
+        [SerializeField] private string briefingHeadline = "PEGUE O BISTURI";
+
         [Header("Always visible")]
         [SerializeField] private Text clockText;
         [SerializeField] private Image bleedFill;
@@ -175,12 +185,12 @@ namespace VRSurgery.Surgery
                 case SessionState.Attract:
                     LeaderboardEntry? best = leaderboard != null ? leaderboard.Best : null;
                     SetMessage(
-                        best.HasValue ? $"MELHOR TEMPO: {best.Value.Seconds:F1}s" : "CONTROLE A HEMORRAGIA",
-                        best.HasValue ? $"por {best.Value.Name} — consegue superar?" : "Coloque o headset para começar");
+                        best.HasValue ? $"MELHOR TEMPO: {best.Value.Seconds:F1}s" : attractHeadline,
+                        best.HasValue ? $"por {best.Value.Name} — consegue superar?" : attractFallbackSubline);
                     break;
 
                 case SessionState.Briefing:
-                    SetMessage("PEGUE O BISTURI", session.EducationalFact);
+                    SetMessage(briefingHeadline, session.EducationalFact);
                     break;
 
                 case SessionState.Running:
@@ -255,6 +265,16 @@ namespace VRSurgery.Surgery
         public void BindBleedSource(Func<float> intensity01)
         {
             _bleedIntensity = intensity01;
+        }
+
+        /// <summary>Overrides the attract/briefing copy for a scene whose first gesture, or
+        /// framing, is not "pegue o bisturi". Pass null for any line to keep its default.</summary>
+        public void BindCopy(string attractHeadline = null, string attractFallbackSubline = null,
+            string briefingHeadline = null)
+        {
+            if (attractHeadline != null) { this.attractHeadline = attractHeadline; }
+            if (attractFallbackSubline != null) { this.attractFallbackSubline = attractFallbackSubline; }
+            if (briefingHeadline != null) { this.briefingHeadline = briefingHeadline; }
         }
 
         public void BindWidgets(Text clock, Image bleed, Image vignette, Text headline, Text subline,

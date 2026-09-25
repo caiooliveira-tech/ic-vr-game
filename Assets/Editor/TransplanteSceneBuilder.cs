@@ -1179,6 +1179,12 @@ namespace VRSurgery.EditorTools
 
             ProjectionHUD hud = root.AddComponent<ProjectionHUD>();
             hud.Bind(session, null, leaderboard);
+            // No scalpel in this scene and the round starts on the sternotomy, not a grab — the
+            // audience screen said "PEGUE O BISTURI" for a bisturi that does not exist here until
+            // this override, straight from a headset test.
+            hud.BindCopy(
+                attractHeadline: "TRANSPLANTE DE CORAÇÃO",
+                briefingHeadline: "ABRA O TÓRAX");
             hud.BindBleedSource(() =>
             {
                 if (vessels == null || vessels.Length == 0) { return 0f; }
