@@ -540,7 +540,19 @@ namespace VRSurgery.EditorTools
                 built[i] = site.AddComponent<VesselAnastomosis>();
                 built[i].Bind(layout[i].site, null, 0.022f);
 
-                BuildVesselMarker(site.transform, layout[i].site, 0.022f);
+                MeshRenderer cuff = BuildVesselMarker(site.transform, layout[i].site, 0.022f);
+
+                // The ring's colour before anyone touches it: arterial red or venous blue, same
+                // rule BuildVesselMarker itself used to pick it, kept in step so the two never
+                // silently disagree about which vessels read as arteries.
+                bool arterial = layout[i].site == VesselSite.Aorta ||
+                                 layout[i].site == VesselSite.PulmonaryArtery;
+                Color resting = arterial
+                    ? new Color(0.85f, 0.22f, 0.20f, 0.65f)
+                    : new Color(0.30f, 0.42f, 0.72f, 0.65f);
+
+                VesselAnastomosisVisual visual = site.AddComponent<VesselAnastomosisVisual>();
+                visual.Bind(built[i], cuff, resting);
             }
 
             Debug.Log($"[Transplante] {built.Length} anastomoses posicionadas ao redor do assento");
@@ -614,7 +626,7 @@ namespace VRSurgery.EditorTools
         ///
         /// Arterial red and venous blue, the one convention the generated texture did carry.
         /// </summary>
-        private static void BuildVesselMarker(Transform site, VesselSite vessel, float radius)
+        private static MeshRenderer BuildVesselMarker(Transform site, VesselSite vessel, float radius)
         {
             bool arterial = vessel == VesselSite.Aorta || vessel == VesselSite.PulmonaryArtery;
 
@@ -628,6 +640,7 @@ namespace VRSurgery.EditorTools
                 : new Color(0.30f, 0.42f, 0.72f, 0.65f));
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             renderer.receiveShadows = false;
+            return renderer;
         }
 
         /// <summary>
