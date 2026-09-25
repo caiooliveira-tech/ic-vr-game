@@ -46,9 +46,18 @@ namespace VRSurgery.EditorTools
 
         private const float MonitorHeight = 0.34f;
 
-        /// <summary>0-based; index 0 is "Display 1", index 1 is "Display 2".</summary>
+        /// <summary>0-based; index 0 is "Display 1", index 1 is "Display 2", and so on.</summary>
         private const int SpectatorDisplayIndex = 0;
+
+        /// <summary>The projector aimed at the physical mannequin. Gets only the 3D scene — the
+        /// patient, the heart, the light reddening with the clock — nothing drawn as 2D text,
+        /// because whatever this camera sees lands on a real prop's body, not a screen.</summary>
         private const int ProjectionDisplayIndex = 1;
+
+        /// <summary>A second monitor beside the mannequin, for what used to ride on top of the
+        /// projector's own image: the clock, the score, the briefing line. A TV can show text
+        /// legibly; a torso-shaped prop cannot.</summary>
+        private const int AudienceHudDisplayIndex = 2;
 
         /// <summary>Layer the rig and its UI are moved to, so the audience's projector never
         /// shows the operator's own controllers or teleport gizmo.</summary>
@@ -1105,9 +1114,11 @@ namespace VRSurgery.EditorTools
                       $"esternotomia num raio de {sternalReach * 100f:F1}cm, " +
                       $"{work.Count} ponto(s) de trabalho para as mãos");
 
-            // The public side of the stand: what the docx calls a projeção enquanto o visitante
-            // opera — a big clock, the risk colour, the day's best time, and the table between
-            // visitors, all on a screen nobody wearing the headset ever sees.
+            // The public side of the stand, across three displays the headset never sees:
+            // Display 1 mirrors the surgeon for whoever is next in line, Display 2 is the
+            // projector aimed at the physical mannequin (the operative field itself, nothing
+            // drawn as text), and Display 3 is a monitor beside it carrying the clock, the risk
+            // colour and the scoreboard — the reading that a torso-shaped prop cannot show.
             BuildProjectionHUD(systems, session, leaderboard, vessels);
             WireUrgencyTint(systems);
             HideOperatorVisualsFromProjection();
@@ -1116,21 +1127,24 @@ namespace VRSurgery.EditorTools
         }
 
         /// <summary>
-        /// The audience's screen: clock, risk colour, the day's best time, and the table between
-        /// visitors. Ported from SurgeryMvpSceneBuilder's ProjectionHUD wiring — the component
-        /// itself already had no dependency on that scene beyond an optional BleedingSystem, which
-        /// this scene has no equivalent of. In its place, the bleed bar reads the fraction of
-        /// vessels currently leaking, the same risk signal the concept describes for the trocar.
+        /// The "vitals monitor" beside the mannequin: clock, risk colour, the day's best time,
+        /// and the table between visitors. On its own display, separate from the projector — the
+        /// projector's image lands on a physical prop's body, and text projected onto a torso
+        /// reads as nothing a visitor can make out. Ported from SurgeryMvpSceneBuilder's
+        /// ProjectionHUD wiring; the component itself had no dependency on that scene beyond an
+        /// optional BleedingSystem, which this scene has no equivalent of — the bleed bar reads
+        /// the fraction of vessels currently leaking instead, the same risk signal the concept
+        /// describes for the trocar.
         /// </summary>
         private static GameObject BuildProjectionHUD(
             GameObject systems, EventSessionController session, Leaderboard leaderboard,
             VesselAnastomosis[] vessels)
         {
-            GameObject root = new GameObject("ProjectionHUD");
+            GameObject root = new GameObject("AudienceHud");
 
             Canvas canvas = root.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.targetDisplay = ProjectionDisplayIndex;
+            canvas.targetDisplay = AudienceHudDisplayIndex;
 
             CanvasScaler scaler = root.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -1200,8 +1214,13 @@ namespace VRSurgery.EditorTools
             hud.BindWidgets(clock, bleedFill, vignette, headline, subline,
                 clockGroup, scoreGroup, scoreTable);
 
-            Debug.Log($"[Transplante] projeção -> Display {ProjectionDisplayIndex + 1} " +
-                      "(canvas overlay; invisível ao headset)");
+            // An overlay canvas needs its own display activated at runtime just like the
+            // projection camera does; nothing renders to Display 3 without this, silently.
+            ProjectionDisplay activator = root.AddComponent<ProjectionDisplay>();
+            SetPrivateField(activator, "displayIndex", AudienceHudDisplayIndex);
+
+            Debug.Log($"[Transplante] monitor de vitais -> Display {AudienceHudDisplayIndex + 1} " +
+                      "(canvas overlay, tela própria ao lado do manequim; invisível ao headset e ao projetor)");
             return root;
         }
 
