@@ -29,6 +29,7 @@ namespace VRSurgery.Surgery
         [SerializeField] private EventSessionController session;
         [SerializeField] private BypassWorker bypassWorker;
         [SerializeField] private SternotomyWorker sternotomyWorker;
+        [SerializeField] private AnastomosisWorker anastomosisWorker;
 
         [Header("Screen")]
         [SerializeField] private TextMesh instructionText;
@@ -129,6 +130,16 @@ namespace VRSurgery.Surgery
                     case SessionState.Scoreboard:
                         return "MELHORES TEMPOS";
                 }
+            }
+
+            // A join held too unsteady is not a refusal — nothing was rejected, the vessel is
+            // simply leaking now. It still needs its own line, or the visitor sees the vessel
+            // count stop climbing with no idea why.
+            VesselAnastomosis activeSite = anastomosisWorker != null ? anastomosisWorker.ActiveSite : null;
+            if (activeSite != null && activeSite.IsBleeding)
+            {
+                return $"SANGRAMENTO NA {activeSite.DisplayName.ToUpperInvariant()}\n" +
+                       "Mantenha o instrumento no ponto para estancar";
             }
 
             return procedure != null ? procedure.CurrentInstruction : "Aguardando";
@@ -235,7 +246,8 @@ namespace VRSurgery.Surgery
             SternotomyWorker sternotomy,
             TextMesh instruction,
             TextMesh clock,
-            TextMesh reason)
+            TextMesh reason,
+            AnastomosisWorker anastomosis = null)
         {
             if (bypassWorker != null)
             {
@@ -247,6 +259,7 @@ namespace VRSurgery.Surgery
             session = controller;
             bypassWorker = worker;
             sternotomyWorker = sternotomy;
+            anastomosisWorker = anastomosis;
             instructionText = instruction;
             clockText = clock;
             reasonText = reason;

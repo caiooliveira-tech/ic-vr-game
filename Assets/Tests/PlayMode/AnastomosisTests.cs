@@ -85,6 +85,65 @@ namespace VRSurgery.Tests
         }
 
         [Test]
+        public void AShakyHoldLeavesTheJoinBleedingInsteadOfClean()
+        {
+            // Alternate two points inside the radius, fast enough that consecutive samples read
+            // as a hand that will not sit still, for most of the hold.
+            Vector3 a = On + new Vector3(0.01f, 0f, 0f);
+            Vector3 b = On - new Vector3(0.01f, 0f, 0f);
+
+            for (int i = 0; i < 120; i++)
+            {
+                _site.Work(i % 2 == 0 ? a : b, 1f / 60f);
+            }
+
+            Assert.IsFalse(_site.IsJoined, "A shaky hold should not close clean.");
+            Assert.IsTrue(_site.IsBleeding, "An imprecise join should leak instead.");
+            Assert.AreEqual(0, _procedure.VesselsConnected,
+                "A leaking join has not reached the procedure yet.");
+        }
+
+        [Test]
+        public void PressureStopsTheBleedingAndFinishesTheJoin()
+        {
+            Vector3 a = On + new Vector3(0.01f, 0f, 0f);
+            Vector3 b = On - new Vector3(0.01f, 0f, 0f);
+
+            for (int i = 0; i < 120; i++)
+            {
+                _site.Work(i % 2 == 0 ? a : b, 1f / 60f);
+            }
+
+            Assert.IsTrue(_site.IsBleeding);
+
+            // Steady pressure, same as any other hold at the site.
+            for (int i = 0; i < 120; i++) { _site.Work(On, 1f / 60f); }
+
+            Assert.IsFalse(_site.IsBleeding, "Sustained pressure should stop the leak.");
+            Assert.IsTrue(_site.IsJoined, "and the join should finish once it does.");
+            Assert.IsTrue(_site.BledDuringJoin, "The site should remember it did not close clean.");
+            Assert.AreEqual(1, _procedure.VesselsConnected,
+                "The procedure only hears about the join once it is actually resolved.");
+        }
+
+        [Test]
+        public void AGentleTremorStillClosesClean()
+        {
+            // A small, slow drift within the radius — the kind of wobble every visitor has —
+            // should not be enough to count as an imprecise join.
+            Vector3 origin = On;
+            for (int i = 0; i < 120; i++)
+            {
+                float wobble = Mathf.Sin(i * 0.05f) * 0.002f;
+                _site.Work(origin + new Vector3(wobble, 0f, 0f), 1f / 60f);
+            }
+
+            Assert.IsTrue(_site.IsJoined);
+            Assert.IsFalse(_site.IsBleeding);
+            Assert.IsFalse(_site.BledDuringJoin);
+        }
+
+        [Test]
         public void AJoinedVesselStaysJoined()
         {
             for (int i = 0; i < 120; i++) { _site.Work(On, 1f / 60f); }

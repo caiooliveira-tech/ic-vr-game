@@ -992,7 +992,8 @@ namespace VRSurgery.EditorTools
                 procedure, session, worker, opening,
                 monitor.transform.Find("InstructionText").GetComponent<TextMesh>(),
                 monitor.transform.Find("ClockText").GetComponent<TextMesh>(),
-                monitor.transform.Find("ReasonText").GetComponent<TextMesh>());
+                monitor.transform.Find("ReasonText").GetComponent<TextMesh>(),
+                sewing);
 
             Debug.Log($"[Transplante] procedimento ligado: {procedure.VesselCount} vasos, " +
                       $"rodada {definition.RoundSeconds:F0}s, assento pericárdico em {seat.transform.position}, " +
