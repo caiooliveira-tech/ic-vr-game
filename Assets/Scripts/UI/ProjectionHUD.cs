@@ -1,3 +1,4 @@
+using System;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
@@ -24,6 +25,14 @@ namespace VRSurgery.Surgery
         [SerializeField] private EventSessionController session;
         [SerializeField] private BleedingSystem bleeding;
         [SerializeField] private Leaderboard leaderboard;
+
+        /// <summary>
+        /// Alternative source for the bleed bar, for a scene with no BleedingSystem of its own —
+        /// the transplant stand's risk is spread across several vessel sites, not one wound, so it
+        /// hands in a function instead of a component. Takes priority over bleeding when both are
+        /// set, which never happens outside a test.
+        /// </summary>
+        private Func<float> _bleedIntensity;
 
         [Header("Always visible")]
         [SerializeField] private Text clockText;
@@ -134,7 +143,9 @@ namespace VRSurgery.Surgery
                 return;
             }
 
-            float amount = bleeding != null ? bleeding.Intensity01 : 0f;
+            float amount = _bleedIntensity != null
+                ? _bleedIntensity()
+                : (bleeding != null ? bleeding.Intensity01 : 0f);
             bleedFill.fillAmount = amount;
             bleedFill.color = Color.Lerp(bleedCalm, bleedHeavy, amount);
         }
@@ -237,6 +248,13 @@ namespace VRSurgery.Surgery
             session = controller;
             bleeding = wound;
             leaderboard = table;
+        }
+
+        /// <summary>Binds a bleed signal that is not a BleedingSystem, e.g. several vessel sites
+        /// reduced to one severity number. Pass null to go back to reading BleedingSystem.</summary>
+        public void BindBleedSource(Func<float> intensity01)
+        {
+            _bleedIntensity = intensity01;
         }
 
         public void BindWidgets(Text clock, Image bleed, Image vignette, Text headline, Text subline,

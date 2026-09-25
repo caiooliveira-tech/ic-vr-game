@@ -167,6 +167,7 @@ legibilidade dos anéis a 30 cm do olho são estimativas informadas, não mediç
 - `WoundRenderer` (faixa cosmética) e `IncisableSkin` (troca binária de estado) continuam no
   legado e não foram removidos neste incremento.
 - **A projeção exige Display 2**, que não existe em Quest standalone.
+- **Projeção do `TransplanteCardiaco` é nova e não testada em sala.** `ProjectionHUD` e `SceneUrgencyTint` foram portados do `SurgeryMVP` (câmera aérea ortográfica, canvas overlay no Display 2, luz avermelhando com o relógio); a barra de sangramento agora lê a fração de anastomoses vazando em vez de um `BleedingSystem`. Posição da câmera e enquadramento herdaram os números validados no MVP, não foram remedidos para este paciente.
 - **O gradil costal** é proporcionalmente estreito: 23,8 × 16,0 × 30,0 cm contra
   28 × 20 × 30 reais. Escala uniforme, sem distorção, mas um tórax magro.
 - **Teclado de nome no placar não validado.** `NameEntryController` + `NameEntryWorker` existem e têm testes de lógica, mas a posição do painel de teclas (perto da posição do cirurgião, ao lado do campo cirúrgico) é um primeiro chute como os offsets de anastomose — ninguém tentou digitar um nome com o óculos posto.

@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using VRSurgery.Data;
@@ -10,6 +12,7 @@ using VRSurgery.Session;
 using VRSurgery.Surgery;
 using VRSurgery.Tools;
 using VRSurgery.Transplant;
+using VRSurgery.VR;
 
 namespace VRSurgery.EditorTools
 {
@@ -43,6 +46,14 @@ namespace VRSurgery.EditorTools
         private const float MonitorWidth = 0.56f;
 
         private const float MonitorHeight = 0.34f;
+
+        /// <summary>0-based; index 0 is "Display 1", index 1 is "Display 2".</summary>
+        private const int SpectatorDisplayIndex = 0;
+        private const int ProjectionDisplayIndex = 1;
+
+        /// <summary>Layer the rig and its UI are moved to, so the audience's projector never
+        /// shows the operator's own controllers or teleport gizmo.</summary>
+        private const string OperatorLayer = "OperatorOnly";
 
         /// <summary>
         /// Level the scene is built for. The bypass sites and the round length both follow from
@@ -1094,6 +1105,364 @@ namespace VRSurgery.EditorTools
                       $"rodada {definition.RoundSeconds:F0}s, assento pericárdico em {seat.transform.position}, " +
                       $"esternotomia num raio de {sternalReach * 100f:F1}cm, " +
                       $"{work.Count} ponto(s) de trabalho para as mãos");
+
+            // The public side of the stand: what the docx calls a projeção enquanto o visitante
+            // opera — a big clock, the risk colour, the day's best time, and the table between
+            // visitors, all on a screen nobody wearing the headset ever sees.
+            BuildProjectionHUD(systems, session, leaderboard, vessels);
+            WireUrgencyTint(systems);
+            HideOperatorVisualsFromProjection();
+            BuildSpectatorCamera();
+            BuildProjectionCamera(WorldBounds(sternum).center);
+        }
+
+        /// <summary>
+        /// The audience's screen: clock, risk colour, the day's best time, and the table between
+        /// visitors. Ported from SurgeryMvpSceneBuilder's ProjectionHUD wiring — the component
+        /// itself already had no dependency on that scene beyond an optional BleedingSystem, which
+        /// this scene has no equivalent of. In its place, the bleed bar reads the fraction of
+        /// vessels currently leaking, the same risk signal the concept describes for the trocar.
+        /// </summary>
+        private static GameObject BuildProjectionHUD(
+            GameObject systems, EventSessionController session, Leaderboard leaderboard,
+            VesselAnastomosis[] vessels)
+        {
+            GameObject root = new GameObject("ProjectionHUD");
+
+            Canvas canvas = root.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.targetDisplay = ProjectionDisplayIndex;
+
+            CanvasScaler scaler = root.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.matchWidthOrHeight = 1f;
+
+            Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+
+            Image vignette = BuildHudImage(root.transform, "UrgencyVignette",
+                new Vector2(0f, 0f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero,
+                new Color(0.75f, 0.05f, 0.05f, 0f));
+
+            GameObject clockGroup = new GameObject("ClockGroup", typeof(RectTransform));
+            clockGroup.transform.SetParent(root.transform, false);
+            StretchFull(clockGroup.GetComponent<RectTransform>());
+
+            Text clock = BuildHudText(clockGroup.transform, "Clock", font, 220, TextAnchor.UpperCenter,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -40f), new Vector2(900f, 260f));
+
+            // "Risco de sangramento" rather than one wound's bleed bar: how many of the five
+            // anastomoses are currently leaking, which is the number the concept's bar generalises to.
+            BuildHudImage(clockGroup.transform, "BleedTrack",
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -330f), new Vector2(1100f, 46f),
+                new Color(0.12f, 0.12f, 0.14f, 0.85f));
+
+            Image bleedFill = BuildHudImage(clockGroup.transform, "BleedFill",
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -330f), new Vector2(1100f, 46f),
+                new Color(0.85f, 0.25f, 0.25f, 1f));
+            bleedFill.type = Image.Type.Filled;
+            bleedFill.fillMethod = Image.FillMethod.Horizontal;
+            bleedFill.fillAmount = 0f;
+
+            Text headline = BuildHudText(root.transform, "Headline", font, 110, TextAnchor.MiddleCenter,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 60f), new Vector2(1600f, 180f));
+
+            Text subline = BuildHudText(root.transform, "Subline", font, 52, TextAnchor.UpperCenter,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -80f), new Vector2(1500f, 220f));
+
+            GameObject scoreGroup = new GameObject("ScoreboardGroup", typeof(RectTransform));
+            scoreGroup.transform.SetParent(root.transform, false);
+            StretchFull(scoreGroup.GetComponent<RectTransform>());
+
+            Text scoreTable = BuildHudText(scoreGroup.transform, "ScoreTable", font, 64, TextAnchor.UpperCenter,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -140f), new Vector2(1100f, 460f));
+            scoreTable.lineSpacing = 1.35f;
+
+            ProjectionHUD hud = root.AddComponent<ProjectionHUD>();
+            hud.Bind(session, null, leaderboard);
+            hud.BindBleedSource(() =>
+            {
+                if (vessels == null || vessels.Length == 0) { return 0f; }
+
+                int bleeding = 0;
+                for (int i = 0; i < vessels.Length; i++)
+                {
+                    if (vessels[i] != null && vessels[i].IsBleeding) { bleeding++; }
+                }
+
+                return (float)bleeding / vessels.Length;
+            });
+            hud.BindWidgets(clock, bleedFill, vignette, headline, subline,
+                clockGroup, scoreGroup, scoreTable);
+
+            Debug.Log($"[Transplante] projeção -> Display {ProjectionDisplayIndex + 1} " +
+                      "(canvas overlay; invisível ao headset)");
+            return root;
+        }
+
+        /// <summary>Hooks the room's light to the clock, the same way SurgeryMVP does.</summary>
+        private static void WireUrgencyTint(GameObject systems)
+        {
+            Light key = null;
+            foreach (Light light in Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                if (light.type == LightType.Directional)
+                {
+                    key = light;
+                    break;
+                }
+            }
+
+            if (key == null)
+            {
+                Debug.LogWarning("[Transplante] Nenhuma luz direcional encontrada; a sala não avermelhará com o relógio.");
+            }
+
+            SceneUrgencyTint tint = systems.AddComponent<SceneUrgencyTint>();
+            tint.Bind(systems.GetComponent<EventSessionController>(), key);
+
+            Debug.Log($"[Transplante] tom de urgência ligado a '{(key != null ? key.name : "nada")}'");
+        }
+
+        /// <summary>Moves the rig's own visuals off the layer the projection camera reads, so the
+        /// audience sees the patient and not the operator's controllers or teleport gizmo.</summary>
+        private static void HideOperatorVisualsFromProjection()
+        {
+            int layer = EnsureLayer(OperatorLayer);
+            if (layer < 0) { return; }
+
+            int moved = 0;
+            int skipped = 0;
+
+            foreach (string rootName in new[] { "XR Origin", "Teleport Anchor" })
+            {
+                GameObject root = GameObject.Find(rootName);
+                if (root == null) { continue; }
+
+                foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+                {
+                    bool draws = t.GetComponent<Renderer>() != null
+                              || t.GetComponent<Canvas>() != null
+                              || t.GetComponent<CanvasRenderer>() != null;
+                    if (!draws) { continue; }
+
+                    if (t.GetComponent<Collider>() != null) { skipped++; continue; }
+
+                    t.gameObject.layer = layer;
+                    moved++;
+                }
+            }
+
+            Debug.Log($"[Transplante] {moved} elemento(s) do operador movidos para '{OperatorLayer}' " +
+                      $"({skipped} preservados por terem collider)");
+        }
+
+        /// <summary>Finds a layer by name, claiming the first free user slot if it does not exist.</summary>
+        private static int EnsureLayer(string layerName)
+        {
+            int existing = LayerMask.NameToLayer(layerName);
+            if (existing >= 0) { return existing; }
+
+            SerializedObject tagManager = new SerializedObject(
+                AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
+            SerializedProperty layers = tagManager.FindProperty("layers");
+
+            for (int i = 8; i < layers.arraySize; i++)
+            {
+                SerializedProperty slot = layers.GetArrayElementAtIndex(i);
+                if (!string.IsNullOrEmpty(slot.stringValue)) { continue; }
+
+                slot.stringValue = layerName;
+                tagManager.ApplyModifiedProperties();
+                AssetDatabase.SaveAssets();
+                Debug.Log($"[Transplante] camada '{layerName}' criada no índice {i}");
+                return i;
+            }
+
+            Debug.LogError($"[Transplante] Sem camada de usuário livre para '{layerName}'.");
+            return -1;
+        }
+
+        /// <summary>
+        /// Flat camera that mirrors the headset, for the spectator screen on Display 1.
+        /// </summary>
+        private static void BuildSpectatorCamera()
+        {
+            GameObject go = new GameObject("SpectatorCamera");
+
+            Camera cam = go.AddComponent<Camera>();
+            cam.targetDisplay = SpectatorDisplayIndex;
+            cam.clearFlags = CameraClearFlags.Skybox;
+            cam.fieldOfView = 70f;
+            cam.nearClipPlane = 0.02f;
+            cam.farClipPlane = 60f;
+
+            UnityEngine.Rendering.Universal.UniversalAdditionalCameraData data =
+                go.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
+            data.renderPostProcessing = false;
+            data.allowXRRendering = false;
+
+            HeadsetFollowCamera follow = go.AddComponent<HeadsetFollowCamera>();
+            Camera head = Camera.main;
+            if (head != null)
+            {
+                follow.Headset = head.transform;
+                go.transform.SetPositionAndRotation(head.transform.position, head.transform.rotation);
+            }
+            else
+            {
+                Debug.LogWarning("[Transplante] Sem MainCamera para espelhar; a visão do espectador ficará parada.");
+            }
+
+            Debug.Log($"[Transplante] câmera de espectador -> Display {SpectatorDisplayIndex + 1}, " +
+                      $"seguindo {(head != null ? head.name : "nada")}");
+        }
+
+        /// <summary>
+        /// Overhead camera feeding the projector on Display 2, framed on the patient, the table
+        /// and the donor stand, so spectators see the operative field without a headset.
+        ///
+        /// Position and framing carried over from SurgeryMVP's validated projection camera, not
+        /// re-measured against this scene's own patient — like the anastomosis offsets, this
+        /// needs to be checked against the real room before the stand opens.
+        /// </summary>
+        private static void BuildProjectionCamera(Vector3 thoraxCenter)
+        {
+            GameObject go = new GameObject("ProjectionCamera");
+            go.transform.position = new Vector3(0f, 2.62f, thoraxCenter.z);
+            go.transform.rotation = Quaternion.Euler(90f, 90f, 0f);
+
+            Camera cam = go.AddComponent<Camera>();
+            cam.targetDisplay = ProjectionDisplayIndex;
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = Color.black;
+
+            int operatorLayer = LayerMask.NameToLayer(OperatorLayer);
+            if (operatorLayer >= 0) { cam.cullingMask &= ~(1 << operatorLayer); }
+
+            cam.orthographic = true;
+            cam.nearClipPlane = 0.05f;
+            cam.farClipPlane = 12f;
+            cam.orthographicSize = ProjectionSizeFor(cam);
+
+            UnityEngine.Rendering.Universal.UniversalAdditionalCameraData data =
+                go.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>();
+            data.renderPostProcessing = false;
+            data.allowXRRendering = false;
+
+            go.AddComponent<ProjectionDisplay>();
+
+            Debug.Log($"[Transplante] câmera de projeção em {go.transform.position} " +
+                      $"-> Display {ProjectionDisplayIndex + 1}, tamanho ortográfico {cam.orthographicSize:F3}");
+        }
+
+        /// <summary>Frames the patient, the table and the donor stand in the projection camera's view.</summary>
+        private static float ProjectionSizeFor(Camera cam)
+        {
+            Bounds subject = default;
+            bool any = false;
+
+            foreach (string name in new[] { "Patient", "OperatingTable", "DonorStand" })
+            {
+                GameObject go = GameObject.Find(name);
+                if (go == null) { continue; }
+
+                foreach (Renderer r in go.GetComponentsInChildren<Renderer>())
+                {
+                    if (!any) { subject = r.bounds; any = true; } else { subject.Encapsulate(r.bounds); }
+                }
+            }
+
+            if (!any)
+            {
+                Debug.LogWarning("[Transplante] Nada para enquadrar; usando 1m de tamanho ortográfico.");
+                return 1f;
+            }
+
+            float halfWidth = 0f;
+            float halfHeight = 0f;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 corner = new Vector3(
+                    (i & 1) == 0 ? subject.min.x : subject.max.x,
+                    (i & 2) == 0 ? subject.min.y : subject.max.y,
+                    (i & 4) == 0 ? subject.min.z : subject.max.z);
+
+                Vector3 local = cam.transform.InverseTransformPoint(corner);
+                halfWidth = Mathf.Max(halfWidth, Mathf.Abs(local.x));
+                halfHeight = Mathf.Max(halfHeight, Mathf.Abs(local.y));
+            }
+
+            const float margin = 1.06f;
+            float size = Mathf.Max(halfHeight, halfWidth) * margin;
+
+            Debug.Log($"[Transplante] enquadrando sujeito {subject.size} -> meia-largura {halfWidth:F3}, " +
+                      $"meia-altura {halfHeight:F3}, tamanho ortográfico {size:F3}");
+            return size;
+        }
+
+        private static Image BuildHudImage(Transform parent, string name, Vector2 anchorMin,
+            Vector2 anchorMax, Vector2 position, Vector2 size, Color colour)
+        {
+            GameObject go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+
+            RectTransform rect = go.GetComponent<RectTransform>();
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+
+            if (anchorMin == Vector2.zero && anchorMax == Vector2.one)
+            {
+                rect.offsetMin = Vector2.zero;
+                rect.offsetMax = Vector2.zero;
+            }
+            else
+            {
+                rect.anchoredPosition = position;
+                rect.sizeDelta = size;
+            }
+
+            Image image = go.AddComponent<Image>();
+            image.color = colour;
+            image.raycastTarget = false;
+            return image;
+        }
+
+        private static void StretchFull(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+        }
+
+        private static Text BuildHudText(Transform parent, string name, Font font, int size,
+            TextAnchor anchor, Vector2 anchorMin, Vector2 anchorMax, Vector2 position, Vector2 sizeDelta)
+        {
+            GameObject go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+
+            RectTransform rect = go.GetComponent<RectTransform>();
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.anchoredPosition = position;
+            rect.sizeDelta = sizeDelta;
+
+            Text text = go.AddComponent<Text>();
+            text.font = font;
+            text.fontSize = size;
+            text.alignment = anchor;
+            text.color = Color.white;
+            text.raycastTarget = false;
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+
+            if (font == null)
+            {
+                Debug.LogError("[Transplante] Fonte interna ausente; a projeção ficará em branco.");
+            }
+
+            return text;
         }
 
         /// <summary>
