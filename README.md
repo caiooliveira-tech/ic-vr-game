@@ -169,7 +169,7 @@ legibilidade dos anéis a 30 cm do olho são estimativas informadas, não mediç
 - **A projeção exige Display 2**, que não existe em Quest standalone.
 - **O gradil costal** é proporcionalmente estreito: 23,8 × 16,0 × 30,0 cm contra
   28 × 20 × 30 reais. Escala uniforme, sem distorção, mas um tórax magro.
-- **Sem entrada de nome** no placar: as corridas entram como "Anônimo".
+- **Teclado de nome no placar não validado.** `NameEntryController` + `NameEntryWorker` existem e têm testes de lógica, mas a posição do painel de teclas (perto da posição do cirurgião, ao lado do campo cirúrgico) é um primeiro chute como os offsets de anastomose — ninguém tentou digitar um nome com o óculos posto.
 
 Próximo passo recomendado para a incisão: ordenar a borda por conectividade topológica (não
 apenas por distância ao longo da trajetória), gerar uma parede interna contínua e corrigir a
