@@ -112,6 +112,7 @@ namespace VRSurgery.EditorTools
 
             RenameRig();
             WireHands();
+            ApplyGloveMaterialToHands();
 
             GameObject table = BuildTable();
             GameObject patient = BuildPatient(out Bounds bodyBounds);
@@ -1137,6 +1138,12 @@ namespace VRSurgery.EditorTools
             HideOperatorVisualsFromProjection();
             BuildSpectatorCamera();
             BuildProjectionCamera(WorldBounds(sternum).center);
+
+            // Atmosfera visual do centro cirúrgico: nada disso é visto pelo projetor nem pelo
+            // espelho do espectador (ambos já pedem renderPostProcessing = false), só por quem
+            // está de headset.
+            TuneRoomLighting(WorldBounds(sternum).center);
+            BuildClinicalPostProcessing();
         }
 
         /// <summary>
@@ -1590,6 +1597,179 @@ namespace VRSurgery.EditorTools
                   $"Y={folgaY:F1}cm Z={folgaZ:F1}cm — regerar o gradil";
 
             if (inside) { Debug.Log(verdict); } else { Debug.LogWarning(verdict); }
+        }
+
+        // ---------------------------------------------------------------- atmosfera visual
+
+        /// <summary>
+        /// Ilumina a sala como um centro cirúrgico de verdade: intensifica e endurece um pouco a
+        /// luz direcional do template, e pendura um foco cirúrgico sobre o tórax.
+        ///
+        /// Não mexe na cor da luz direcional nem na luz ambiente — isso é do
+        /// <see cref="VRSurgery.Surgery.SceneUrgencyTint"/>, que já os possui inteiramente em
+        /// tempo de execução (recalcula os dois a cada frame a partir do calmo/urgente que ele
+        /// mesmo define). Mudar a cor aqui seria sobrescrito no primeiro Tick dele mesmo assim.
+        /// </summary>
+        private static void TuneRoomLighting(Vector3 thoraxCenter)
+        {
+            Light directional = null;
+            foreach (Light light in Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                if (light.type == LightType.Directional) { directional = light; break; }
+            }
+
+            if (directional != null)
+            {
+                directional.intensity = 1.15f;
+                directional.shadows = LightShadows.Soft;
+                directional.shadowStrength = 0.75f;
+            }
+            else
+            {
+                Debug.LogWarning("[Transplante] Nenhuma luz direcional para ajustar; " +
+                                  "a sala manteve a iluminação padrão do template.");
+            }
+
+            GameObject lampRoot = new GameObject("SurgicalLamp");
+            lampRoot.transform.position = thoraxCenter + new Vector3(0f, 1.35f, 0f);
+            lampRoot.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+            Light lamp = lampRoot.AddComponent<Light>();
+            lamp.type = LightType.Spot;
+            lamp.color = new Color(0.96f, 0.97f, 1f);
+            lamp.intensity = 6f;
+            lamp.range = 3f;
+            lamp.spotAngle = 65f;
+            lamp.innerSpotAngle = 35f;
+            lamp.shadows = LightShadows.Soft;
+            lamp.shadowStrength = 0.6f;
+
+            Debug.Log("[Transplante] foco cirúrgico adicionado sobre o tórax, luz direcional " +
+                      "reforçada (sombra suave, força 0.75)");
+        }
+
+        /// <summary>
+        /// Volume de pós-processamento global (bloom leve, saturação reduzida, vinheta sutil) que
+        /// dá à cena a leitura de "renderizado" em vez de protótipo. Afeta só quem está de
+        /// headset: a câmera do espectador e a do projetor já pedem
+        /// <c>renderPostProcessing = false</c> porque uma delas alimenta um monitor comum e a
+        /// outra o projetor físico, nenhum dos dois deve receber vinheta ou bloom.
+        ///
+        /// O perfil é um asset serializado, reaproveitado nas próximas construções em vez de
+        /// recriado — ajustável à mão pelo Inspector como o material da luva.
+        /// </summary>
+        private static void BuildClinicalPostProcessing()
+        {
+            const string profilePath = "Assets/Settings/Clinical Post Process Profile.asset";
+
+            UnityEngine.Rendering.VolumeProfile profile =
+                AssetDatabase.LoadAssetAtPath<UnityEngine.Rendering.VolumeProfile>(profilePath);
+            bool isNew = profile == null;
+            if (isNew)
+            {
+                profile = ScriptableObject.CreateInstance<UnityEngine.Rendering.VolumeProfile>();
+            }
+
+            UnityEngine.Rendering.Universal.ColorAdjustments colorAdjustments =
+                profile.TryGet(out UnityEngine.Rendering.Universal.ColorAdjustments existingColor)
+                    ? existingColor
+                    : profile.Add<UnityEngine.Rendering.Universal.ColorAdjustments>(true);
+            colorAdjustments.active = true;
+            colorAdjustments.postExposure.overrideState = true;
+            colorAdjustments.postExposure.value = -0.1f;
+            colorAdjustments.contrast.overrideState = true;
+            colorAdjustments.contrast.value = 8f;
+            colorAdjustments.colorFilter.overrideState = true;
+            colorAdjustments.colorFilter.value = new Color(0.93f, 0.96f, 1f);
+            colorAdjustments.saturation.overrideState = true;
+            colorAdjustments.saturation.value = -6f;
+
+            UnityEngine.Rendering.Universal.Bloom bloom =
+                profile.TryGet(out UnityEngine.Rendering.Universal.Bloom existingBloom)
+                    ? existingBloom
+                    : profile.Add<UnityEngine.Rendering.Universal.Bloom>(true);
+            bloom.active = true;
+            bloom.threshold.overrideState = true;
+            bloom.threshold.value = 1.05f;
+            bloom.intensity.overrideState = true;
+            bloom.intensity.value = 0.25f;
+            bloom.scatter.overrideState = true;
+            bloom.scatter.value = 0.6f;
+
+            UnityEngine.Rendering.Universal.Vignette vignette =
+                profile.TryGet(out UnityEngine.Rendering.Universal.Vignette existingVignette)
+                    ? existingVignette
+                    : profile.Add<UnityEngine.Rendering.Universal.Vignette>(true);
+            vignette.active = true;
+            vignette.intensity.overrideState = true;
+            vignette.intensity.value = 0.18f;
+            vignette.smoothness.overrideState = true;
+            vignette.smoothness.value = 0.6f;
+            vignette.color.overrideState = true;
+            vignette.color.value = Color.black;
+
+            if (isNew)
+            {
+                System.IO.Directory.CreateDirectory("Assets/Settings");
+                AssetDatabase.CreateAsset(profile, profilePath);
+            }
+
+            EditorUtility.SetDirty(profile);
+            AssetDatabase.SaveAssets();
+
+            GameObject volumeRoot = GameObject.Find("ClinicalPostProcessVolume");
+            if (volumeRoot == null) { volumeRoot = new GameObject("ClinicalPostProcessVolume"); }
+
+            UnityEngine.Rendering.Volume volume = volumeRoot.GetComponent<UnityEngine.Rendering.Volume>();
+            if (volume == null) { volume = volumeRoot.AddComponent<UnityEngine.Rendering.Volume>(); }
+            volume.isGlobal = true;
+            volume.priority = 1f;
+            volume.weight = 1f;
+            volume.profile = profile;
+
+            Debug.Log("[Transplante] volume de pós-processamento clínico ligado " +
+                      "(bloom leve, saturação -6, vinheta sutil), só para a câmera do headset.");
+        }
+
+        /// <summary>
+        /// Veste as mãos do rig com o material de luva de nitrila azul, em vez da pele padrão do
+        /// template. Procura por qualquer renderer sob "XR Origin" cujo nome contenha "Hand",
+        /// porque a malha exata das mãos do VR Template varia de versão para versão; se nada for
+        /// encontrado, avisa em vez de falhar em silêncio, para o próximo build corrigir o nome
+        /// procurado em vez de descobrir isso só olhando o headset.
+        /// </summary>
+        private static void ApplyGloveMaterialToHands()
+        {
+            Material glove = SurgicalGloveMaterial.CreateGloveMaterial();
+            if (glove == null)
+            {
+                Debug.LogWarning("[Transplante] material de luva não pôde ser criado; " +
+                                  "mãos ficam com a pele padrão do template.");
+                return;
+            }
+
+            GameObject rig = GameObject.Find("XR Origin");
+            if (rig == null) { return; }
+
+            int applied = 0;
+            foreach (Renderer renderer in rig.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer.gameObject.name.IndexOf("Hand", System.StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                Material[] materials = renderer.sharedMaterials;
+                for (int i = 0; i < materials.Length; i++) { materials[i] = glove; }
+                renderer.sharedMaterials = materials;
+                applied++;
+            }
+
+            Debug.Log(applied > 0
+                ? $"[Transplante] material de luva aplicado em {applied} renderer(s) de mão."
+                : "[Transplante] nenhum renderer com 'Hand' no nome sob XR Origin; " +
+                  "as mãos do template continuam com a pele padrão. Confira o nome real do " +
+                  "renderer no rig e ajuste ApplyGloveMaterialToHands se for diferente.");
         }
 
         // ---------------------------------------------------------------- helpers
